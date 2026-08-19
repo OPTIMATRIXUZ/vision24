@@ -1,0 +1,107 @@
+# Production override for app.vision24.uz. Never used alone — always merged:
+#
+#   docker compose -f docker-compose.yml -f deploy/docker-compose.prod.yml ...
+#
+# What it changes and why:
+#
+#   * Every published port is re-bound to 127.0.0.1 (`!override` replaces the
+#     base list instead of concatenating — needs compose v2.24+). Docker's
+#     iptables rules bypass ufw, so a plain "8020:8020" is world-reachable no
+#     matter what the firewall says; the only safe stance is loopback-only,
+#     with nginx as the sole public entrypoint.
+#   * Secrets come from the root .env via compose interpolation. The same .env
+#     is also env_file for the backend services, so POSTGRES_PASSWORD /
+#     MINIO_ACCESS_KEY / MINIO_SECRET_KEY live in exactly one place.
+#   * MINIO_PUBLIC_ENDPOINT / MINIO_PUBLIC_SECURE and DATABASE_URL must be set
+#     HERE, not in .env — the base file's `environment:` anchor already sets
+#     them, and `environment:` beats env_file.
+#   * hfcache persists the ~600 MB CLIP checkpoint (HF_HOME in the image points
+#     at /opt/models/huggingface). Without it, every container recreate
+#     re-downloads the model.
+#   * go2rtc gets a "live" profile so an upload-only deployment doesn't run it.
+#     Start it with --profile live once real RTSP cameras exist.
+#
+# The domain is hardcoded in two values below (MINIO_PUBLIC_ENDPOINT and the
+# frontend's NEXT_PUBLIC_GO2RTC_URL build arg). Changing domains means editing
+# both AND rebuilding the frontend — NEXT_PUBLIC_* is baked at build time.
+
+x-prod-logging: &prod_logging
+  logging:
+    driver: json-file
+    options:
+      max-size: "20m"
+      max-file: "5"
+
+services:
+  postgres:
+    restart: unless-stopped
+    <<: *prod_logging
+    ports: !override
+      - "127.0.0.1:5435:5432"
+    environment:
+      POSTGRES_USER: vision24
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: vision24
+
+  minio:
+    restart: unless-stopped
+    <<: *prod_logging
+    ports: !override
+      - "127.0.0.1:9000:9000"   # S3 API — nginx proxies media.vision24.uz here
+      - "127.0.0.1:9001:9001"   # console — reach it via `ssh -L 9001:localhost:9001`
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:?set MINIO_ACCESS_KEY in .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?set MINIO_SECRET_KEY in .env}
+
+  go2rtc:
+    profiles: ["live"]
+    restart: unless-stopped
+    <<: *prod_logging
+    ports: !override
+      - "127.0.0.1:1984:1984"   # HTTP/WS API — nginx proxies /go2rtc/ here
+      - "127.0.0.1:8554:8554"   # RTSP relay, internal use only
+      - "8555:8555/tcp"         # WebRTC ICE — must be direct, nginx can't proxy it
+      - "8555:8555/udp"
+
+  migrate:
+    <<: *prod_logging
+    environment:
+      DATABASE_URL: postgresql+psycopg://vision24:${POSTGRES_PASSWORD}@postgres:5432/vision24
+      MINIO_PUBLIC_ENDPOINT: media.vision24.uz
+      MINIO_PUBLIC_SECURE: "true"
+
+  api:
+    <<: *prod_logging
+    ports: !override
+      - "127.0.0.1:8020:8020"
+    environment:
+      DATABASE_URL: postgresql+psycopg://vision24:${POSTGRES_PASSWORD}@postgres:5432/vision24
+      MINIO_PUBLIC_ENDPOINT: media.vision24.uz
+      MINIO_PUBLIC_SECURE: "true"
+    volumes:
+      - hfcache:/opt/models/huggingface
+
+  frontend:
+    <<: *prod_logging
+    ports: !override
+      - "127.0.0.1:3001:3001"
+    build:
+      args:
+        # http://api:8020 (compose DNS) is inherited from the base file and
+        # stays correct in production. Only the go2rtc origin changes: the live
+        # page iframes ${NEXT_PUBLIC_GO2RTC_URL}/stream.html, which nginx serves
+        # under /go2rtc/. Baked in even for upload-only deployments so enabling
+        # live video later needs no frontend rebuild.
+        NEXT_PUBLIC_GO2RTC_URL: https://app.vision24.uz/go2rtc
+
+  worker:
+    <<: *prod_logging
+    environment:
+      DATABASE_URL: postgresql+psycopg://vision24:${POSTGRES_PASSWORD}@postgres:5432/vision24
+      MINIO_PUBLIC_ENDPOINT: media.vision24.uz
+      MINIO_PUBLIC_SECURE: "true"
+    volumes:
+      - hfcache:/opt/models/huggingface
+
+volumes:
+  hfcache:
