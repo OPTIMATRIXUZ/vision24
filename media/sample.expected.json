@@ -1,0 +1,7 @@
+{
+  "entries_total": [30, 48],
+  "unique_tracks": [28, 45],
+  "peak_occupancy": [7, 11],
+  "dwell_events": [30, 48],
+  "avg_dwell_s": [8, 18]
+}

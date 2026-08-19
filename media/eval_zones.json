@@ -1,0 +1,8 @@
+[
+  {
+    "name": "full-frame",
+    "kind": "entrance",
+    "polygon": [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+    "record_clips": false
+  }
+]

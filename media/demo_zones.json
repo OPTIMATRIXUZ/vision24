@@ -1,0 +1,14 @@
+[
+  {
+    "name": "Вход",
+    "kind": "entrance",
+    "polygon": [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+    "record_clips": false
+  },
+  {
+    "name": "Касса",
+    "kind": "checkout_area",
+    "polygon": [[0.62, 0.0], [1.0, 0.0], [1.0, 1.0], [0.62, 1.0]],
+    "record_clips": true
+  }
+]

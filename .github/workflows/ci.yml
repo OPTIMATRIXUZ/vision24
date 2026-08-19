@@ -1,0 +1,212 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      docker: ${{ steps.filter.outputs.docker }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+              - '.github/workflows/ci.yml'
+            frontend:
+              - 'frontend/**'
+              - '.github/workflows/ci.yml'
+            docker:
+              - 'backend/Dockerfile'
+              - 'backend/.dockerignore'
+              - 'frontend/Dockerfile'
+              - 'frontend/.dockerignore'
+              - 'docker-compose.yml'
+              - '.github/workflows/ci.yml'
+
+  frontend:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: frontend/.nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run format:check
+      - run: npm test
+      - run: npm run build
+
+  backend-lint:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: backend/.python-version
+
+      - run: uv sync --only-group dev
+      - run: uv run --no-sync ruff check .
+      - run: uv run --no-sync ruff format --check .
+
+  backend-test:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: vision24
+          POSTGRES_PASSWORD: vision24
+          POSTGRES_DB: vision24
+        ports:
+          - 5435:5432
+        options: >-
+          --health-cmd "pg_isready -U vision24"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      VISION24_TEST_DATABASE_URL: postgresql+psycopg://vision24:vision24@localhost:5435/vision24_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: backend/.python-version
+
+      - run: uv sync --frozen
+
+      - run: uv run python -m pytest -m 'not gpu'
+
+      - name: Migrations match the models
+        env:
+          VISION24_ALEMBIC_URL: postgresql+psycopg://vision24:vision24@localhost:5435/vision24
+        run: |
+          uv run alembic upgrade head
+          uv run alembic check
+
+      - run: uv run python -m scripts.gen_env_example --check
+
+  backend-types:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: backend/.python-version
+      - run: uv sync --frozen
+      - run: uv run mypy app worker || true
+
+  images:
+    needs: changes
+    if: needs.changes.outputs.docker == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Warm the base images
+        run: |
+          for image in python:3.12-slim node:22-slim; do
+            for attempt in 1 2 3; do
+              docker pull --quiet "$image" && break
+              echo "::warning::pull of $image failed (attempt $attempt/3)"
+              [ "$attempt" = 3 ] && exit 1
+              sleep 20
+            done
+          done
+
+      - name: Build the backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: false
+          load: true
+          tags: vision24-backend:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build the frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          push: false
+          load: true
+          tags: vision24-frontend:ci
+          build-args: |
+            API_ORIGIN=http://api:8020
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: The backend image starts and its weights are present
+        run: |
+          # --skip-clip because that is how the image is built: YOLO is baked,
+          # the 600 MB CLIP checkpoint is fetched on first use. The check has to
+          # assert what was built, not what the default config would want.
+          docker run --rm vision24-backend:ci python -m scripts.fetch_models --check --skip-clip
+          docker run --rm vision24-backend:ci python -c "import app.main; print('api imports')"
+
+      - name: The frontend image serves its login page with styles
+        run: |
+          docker run -d --rm --name fe -p 3001:3001 vision24-frontend:ci
+          for i in $(seq 1 30); do
+            curl -fsS -o /dev/null http://127.0.0.1:3001/login && break
+            sleep 2
+          done
+          html=$(curl -fsS http://127.0.0.1:3001/login)
+          echo "$html" | grep -q 'lang="ru"' || { echo "login page is not the built app"; exit 1; }
+          css=$(echo "$html" | grep -o '/_next/static/chunks/[a-z0-9_-]*\.css' | head -1)
+          # Standalone output does not copy .next/static; if the Dockerfile ever
+          # stops doing it explicitly the page still renders, just unstyled.
+          test -n "$css" || { echo "no stylesheet linked"; exit 1; }
+          curl -fsS -o /dev/null "http://127.0.0.1:3001$css" || { echo "stylesheet 404 — static assets missing from the image"; exit 1; }
+          docker rm -f fe

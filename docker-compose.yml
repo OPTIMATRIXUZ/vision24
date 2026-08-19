@@ -1,0 +1,120 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    ports:
+      - "5435:5432"
+    environment:
+      POSTGRES_USER: vision24
+      POSTGRES_PASSWORD: vision24
+      POSTGRES_DB: vision24
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vision24"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  go2rtc:
+    image: alexxit/go2rtc
+    ports:
+      - "1984:1984"
+      - "8554:8554"
+      - "8555:8555/tcp"
+      - "8555:8555/udp"
+    volumes:
+      - ./docker/go2rtc/go2rtc.yaml:/config/go2rtc.yaml
+      - ./media:/media:ro
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:1984/api/streams"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  migrate:
+    profiles: ["app", "worker"]
+    build:
+      context: ./backend
+    command: ["python", "-m", "scripts.bootstrap"]
+    restart: "no"
+    env_file: [.env]
+    environment: &backend_env
+      DATABASE_URL: postgresql+psycopg://vision24:vision24@postgres:5432/vision24
+      MINIO_ENDPOINT: minio:9000
+      MINIO_PUBLIC_ENDPOINT: localhost:9000
+      GO2RTC_BASE_URL: http://go2rtc:1984
+      DATA_DIR: /data
+    volumes:
+      - ./media:/data/media
+    depends_on:
+      postgres: {condition: service_healthy}
+      minio: {condition: service_healthy}
+
+  api:
+    profiles: ["app"]
+    build:
+      context: ./backend
+    ports:
+      - "8020:8020"
+    env_file: [.env]
+    environment: *backend_env
+    volumes:
+      - ./media:/data/media
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      postgres: {condition: service_healthy}
+      minio: {condition: service_healthy}
+    restart: unless-stopped
+    deploy:
+      replicas: 1
+
+  frontend:
+    profiles: ["app"]
+    build:
+      context: ./frontend
+      args:
+        API_ORIGIN: http://api:8020
+        NEXT_PUBLIC_GO2RTC_URL: http://localhost:1984
+    ports:
+      - "3001:3001"
+    depends_on:
+      api: {condition: service_healthy}
+    restart: unless-stopped
+
+  worker:
+    profiles: ["worker"]
+    build:
+      context: ./backend
+    command: ["python", "-m", "worker.main"]
+    env_file: [.env]
+    environment:
+      <<: *backend_env
+      YOLO_DEVICE: cpu
+    volumes:
+      - ./media:/data/media
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      postgres: {condition: service_healthy}
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+volumes:
+  pgdata:
+  miniodata:

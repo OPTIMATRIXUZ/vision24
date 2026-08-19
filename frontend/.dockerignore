@@ -1,0 +1,22 @@
+# node_modules is ~700 MB and .next ~54 MB; both are rebuilt inside the image,
+# and shipping host-built artefacts is how a linux/amd64 image ends up with
+# darwin/arm64 native modules in it.
+node_modules/
+.next/
+out/
+coverage/
+*.tsbuildinfo
+
+# Secrets and machine-local overrides. .env.example is kept — it is the
+# documented template and contains no values.
+.env
+.env.*
+!.env.example
+
+# Tests do not run from the image; CI runs them against the source tree.
+**/*.test.ts
+**/*.test.tsx
+vitest.config.mts
+vitest.setup.ts
+
+.DS_Store

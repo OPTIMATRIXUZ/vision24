@@ -1,0 +1,39 @@
+# The build context is ~1.8 GB of which ~2 MB is source. Everything below is
+# either rebuilt inside the image, machine-specific, or a secret.
+#
+# Allowlisting would be safer still, but the file list here is short and stable
+# and an allowlist silently drops new source directories.
+
+# Virtualenv — 1.6 GB, and macOS wheels would not run on linux/amd64 anyway.
+.venv/
+**/__pycache__/
+*.py[cod]
+
+# Tool caches (~98 MB of mypy alone).
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+*.egg-info/
+
+# Model weights. Fetched inside the image by scripts/fetch_models.py so the
+# layer is reproducible and does not depend on what the developer happens to
+# have downloaded.
+*.pt
+*.pth
+*.onnx
+*.engine
+*.safetensors
+
+# Secrets. .env is gitignored but present in every working copy, and a stray
+# .env.backup-* would bake the auth signing key into a distributable layer.
+.env
+.env.*
+
+# Logs, including the AI transcript, which contains prompts and answers.
+*.log
+logs/
+
+# Tests are not run from the image; CI runs them against the source tree.
+tests/
+
+.DS_Store

@@ -1,0 +1,55 @@
+# BoT-SORT — Vision24 batch tracker.
+# Copied from the installed ultralytics botsort.yaml (all 12 keys are mandatory).
+# Appearance ReID was on here until 2026-08-05; see with_reid below for why it
+# is not any more. The filename is kept so nothing has to chase the path.
+
+tracker_type: botsort
+track_high_thresh: 0.25
+track_low_thresh: 0.1
+
+# How confident a detection must be to START a track. Ultralytics ships 0.25;
+# the ByteTrack paper it descends from uses ~0.6, and 0.25 was costing identity
+# on every busy moment at the till. Two people standing shoulder to shoulder
+# under an overhead camera make YOLO emit ONE merged box for a beat, the veteran
+# track follows that blob (its Kalman state grows into it, and fuse_score below
+# weights the blob's higher confidence), and when the correct tight box on the
+# person reappears it cannot reclaim its own track — at 0.25 it clears the bar
+# and is born as a NEW id instead. The veteran then starves and dies. Measured
+# on cashier.MP4 2026-08-05: track #1 held the cashier for 195s, dissolved into
+# a 422x490 blob at t=194.9, and was replaced by #153 (conf 0.46) 0.8s later.
+# At 0.60 that duplicate cannot start a track, so the veteran simply re-matches
+# it out of the lost pool (track_buffer below) once the blob stops:
+#   0.25 -> 66 ids, median track life  9.7s, #1 lived 195.6s
+#   0.60 -> 40 ids, median track life 17.5s, #1 lived 214.5s
+# with total tracked frames down only 2%, so this removes fragmentation rather
+# than coverage. Eval unchanged (41 entries / 39 tracks / peak 9, all in range)
+# and the checkout timeline still yields its 5 visits.
+new_track_thresh: 0.60
+
+track_buffer: 60 # 30 default; longer occlusion tolerance at batch fps
+match_thresh: 0.8
+fuse_score: True
+
+# Global motion compensation corrects a MOVING camera; every Vision24 camera is
+# fixed. sparseOptFlow (the stock default) cost 14ms of CPU per frame — a third
+# of the whole per-frame budget — for nothing. Measured 2026-08-02: 41.2 →
+# 27.4ms/frame with identical eval metrics (entries/tracks/dwell all in range).
+gmc_method: none
+
+proximity_thresh: 0.5
+appearance_thresh: 0.8
+
+# Appearance ReID off. "auto" reuses the detector's own feature maps via a
+# Detect-head hook, so it reads as nearly free — measured 2026-08-05 it costs
+# ~11ms/frame and makes identity WORSE on every clip tested, crowded ones
+# included. cashier.MP4 (4.31 persons/frame, 247 of 1199 sampled frames with
+# overlapping people) — off: 20.2ms/f, 54 ids, 36 breaks, 33 births, 92.7f mean
+# track life; auto: 31.2ms/f, 59 ids, 37 breaks, 35 births, 85.0f. Same
+# direction on sample.mp4 and on 19 real 1920x1072 clips, and the eval harness
+# reports identical counts either way. An overhead till view gives appearance
+# little to work with (heads and shoulders, same uniforms daily, flat light), so
+# appearance distance only adds noise to an association IoU + Kalman already
+# wins. yolo26s-reid.onnx was worse still: 72.8ms/f, 62 ids, 40 breaks.
+# `model` is ignored while this is False; left at auto to keep the revert small.
+with_reid: False
+model: auto

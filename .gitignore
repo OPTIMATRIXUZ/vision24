@@ -1,0 +1,57 @@
+# --- env ---
+# .env.example is the tracked template; everything else is local/secret.
+.env
+.env.*
+!.env.example
+!*/.env.example
+
+# --- python ---
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# --- node ---
+node_modules/
+.next/
+out/
+coverage/
+*.tsbuildinfo
+
+# --- model weights ---
+# Fetched by backend/scripts/fetch_models.py; never committed.
+*.pt
+*.pth
+*.onnx
+*.engine
+*.safetensors
+
+# --- media ---
+# Sample/uploaded footage and rendered output. Scoped by extension rather than
+# by directory so a stray capture outside media/ is still ignored.
+**/*.mp4
+**/*.mov
+**/*.mkv
+**/*.webm
+**/*.m4v
+**/*.avi
+media/uploads/
+media/captures/
+# Detection-worker heartbeat: runtime state, per box.
+media/worker-status.json
+media/worker-stats/
+
+# --- logs ---
+*.log
+logs/
+
+# --- os ---
+.DS_Store
+Thumbs.db
