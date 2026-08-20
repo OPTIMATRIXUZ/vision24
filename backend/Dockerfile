@@ -25,6 +25,13 @@ ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     UV_PROJECT_ENVIRONMENT=/opt/venv
 
+# uv.lock pins `clip` straight from a git URL (git+https://github.com/ultralytics/CLIP),
+# so the sync below clones it — on a machine with a cold uv cache the build dies
+# with "Git executable not found" without this. Builder-only; runtime needs no git.
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y git \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /src
 
 # Dependencies resolve from the lockfile alone, so this layer is reused on every

@@ -22,6 +22,9 @@ dependencies = [
     "ultralytics>=8.4.91",
     "clip @ git+https://github.com/ultralytics/CLIP.git",
     "torch>=2.6",
+    # Direct dep only so [tool.uv.sources] can route it — uv sources don't
+    # apply to transitive packages, and clip/open_clip pull it in regardless.
+    "torchvision>=0.21",
     "pgvector>=0.4",
     "open_clip_torch>=3.0",
     "lap>=0.5.12",
@@ -48,6 +51,10 @@ explicit = true
 
 [tool.uv.sources]
 torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+# torchvision must ride the same index: the PyPI wheel is compiled against the
+# CUDA-default torch build, and pairing it with torch +cpu leaves its C extension
+# unable to register ops ("operator torchvision::nms does not exist" at import).
+torchvision = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
 
 [tool.setuptools]
 packages = ["app", "app.routers", "app.services", "app.services.ai", "worker"]
